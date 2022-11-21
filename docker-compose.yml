@@ -1,0 +1,8 @@
+version: "3.1"
+services:
+  goaws:
+    image: "pafortin/goaws"
+    ports:
+      - 4100:4100
+    volumes:
+      - ./test/goaws-conf:/conf
