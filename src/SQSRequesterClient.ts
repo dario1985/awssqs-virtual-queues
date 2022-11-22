@@ -5,6 +5,7 @@ import { RESPONSE_QUEUE_URL_ATTRIBUTE_NAME } from './constants';
 import { Deferred } from './deferred';
 import { ConsumerFn, SQSMessageConsumer } from './SQSMessageConsumer';
 import { SQSClientAdapter } from './SQSClientAdapter';
+import { QueueError } from './errors';
 
 export class SQSRequesterClient {
   private readonly consumers = new Set<SQSMessageConsumer>();
@@ -36,9 +37,10 @@ export class SQSRequesterClient {
     this.debug('Sending request: %s', request.MessageBody);
     await this.sqs.sendMessage(request);
 
-    const listener = new ResponseListener(this.sqs, queueUrl, () => {
+    const listener = new ResponseListener(this.sqs, queueUrl, async () => {
+      this.debug(`Removing listener`);
       this.consumers.delete(listener);
-      this.sqs.deleteQueue({ QueueUrl: queueUrl });
+      await this.sqs.deleteQueue({ QueueUrl: queueUrl });
     });
     this.consumers.add(listener);
     listener.runFor(timeoutMs);
@@ -56,17 +58,14 @@ class ResponseListener extends SQSMessageConsumer {
     exceptionHandler: ConsumerFn<Error> = console.error,
     maxWaitMs: number = 2000,
   ) {
-    super(
-      sqs,
-      queueUrl,
-      (m: Message) => this.setMessage(m),
-      () => {
-        this.message.reject(new TimeoutError('Timeout'));
+    super(sqs, queueUrl, (m: Message) => this.setMessage(m), {
+      onShutdown: () => {
+        this.message.reject(new TimeoutError(queueUrl));
         return shutdownHook();
       },
-      exceptionHandler,
+      onException: exceptionHandler,
       maxWaitMs,
-    );
+    });
     this.debug = debug(`ResponseListener:${queueUrl.slice(-3)}`);
   }
 
@@ -80,4 +79,8 @@ class ResponseListener extends SQSMessageConsumer {
   }
 }
 
-export class TimeoutError extends Error {}
+export class TimeoutError extends QueueError {
+  constructor(queueUrl: string) {
+    super('Timeout waiting for response', queueUrl);
+  }
+}

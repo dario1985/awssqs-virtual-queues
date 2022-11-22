@@ -1,10 +1,12 @@
-import { Message, SQSClient, SQSClientConfig } from '@aws-sdk/client-sqs';
+import { Message, SQSClient } from '@aws-sdk/client-sqs';
+import { randomInt } from 'crypto';
 import { SQSVirtualQueuesClient } from '../SQSVirtualQueuesClientAdapter';
 import { SQSRequesterClient } from '../SQSRequesterClient';
 import { AmazonSQSResponderClient } from '../SQSResponderClient';
 import { SQSMessageConsumer } from '../SQSMessageConsumer';
 import { VIRTUAL_QUEUE_HOST_QUEUE_ATTRIBUTE } from '../constants';
 import { wait } from '../utils';
+import assert from 'assert';
 
 const endpointUrl = 'http://localhost:4100';
 const sqs = new SQSClient({
@@ -44,23 +46,29 @@ async function main() {
   // This should work on a external lambda
   const requestsQueueUrl = `${endpointUrl}/queue/virtual-requests`;
   const requestHandler = async (m: Message) => {
-    console.log(`Received Request -> ${JSON.stringify(m.Body)} #${m.ReceiptHandle}`);
+    console.log(`*** Received Request -> ${JSON.stringify(m.Body)} #${m.ReceiptHandle}`);
     if (responder.isResponseMessageRequested(m)) {
-      await responder.sendResponseMessage(m, { Body: 'pong' });
+      await responder.sendResponseMessage(m, { Body: 'PONG ' + m.Body?.split(' ')[1] });
     } else console.log('Not Response Message Requested');
   };
   const requestsConsumer = new SQSMessageConsumer(adapter, requestsQueueUrl, requestHandler);
-  requestsConsumer.runFor(1_000);
+  requestsConsumer.start();
 
-  // Requester logic
-  const response = await requester.sendMessageAndGetResponse(
-    {
-      QueueUrl: requestsQueueUrl,
-      MessageBody: 'ping',
-    },
-    5_000,
-  );
-  console.log(`Received Response <- ${JSON.stringify(response.Body)} #${response.ReceiptHandle}`);
+  for (let i = 0; i < 30; i++) {
+    // Requester logic
+    const rnd = `${randomInt(1000)}`;
+    console.log(`>>> Sending Request #${rnd}`);
+    const response = await requester.sendMessageAndGetResponse(
+      {
+        QueueUrl: requestsQueueUrl,
+        MessageBody: `PING ${rnd}`,
+      },
+      5_000,
+    );
+    console.log(`<<< Received Response <- ${JSON.stringify(response.Body)} #${response.ReceiptHandle}`);
+    assert.equal(rnd, response.Body?.split(' ')[1]);
+  }
+
   await requestsConsumer.terminate();
   await adapter.close();
   await deleteQueues();

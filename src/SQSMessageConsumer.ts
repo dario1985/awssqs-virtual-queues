@@ -3,23 +3,40 @@ import { Deferred } from './deferred';
 import { SQSClientAdapter } from './SQSClientAdapter';
 import debug from 'debug';
 import { wait } from './utils';
+import { QueueError } from './errors';
 
 export type ConsumerFn<T> = (message: T) => void | Promise<void>;
+
+export interface SQSMessageConsumerOptions {
+  onShutdown: ConsumerFn<void>;
+  onException: ConsumerFn<Error>;
+  maxWaitMs: number;
+  heartBeatMs: number;
+  disableDeleteMessage: boolean;
+}
 
 export class SQSMessageConsumer {
   private deadlineMs: number = 0;
   private shuttingDown: boolean = false;
   private terminated = new Deferred<boolean>();
+
+  protected readonly options: SQSMessageConsumerOptions;
   protected debug: debug.Debugger;
 
   constructor(
     protected readonly sqs: SQSClientAdapter,
     protected readonly queueUrl: string,
     protected readonly onMessage: ConsumerFn<Message>,
-    protected readonly onShutdown: ConsumerFn<void> = () => {},
-    protected readonly onException: ConsumerFn<Error> = console.error,
-    protected readonly maxWaitMs: number = 2000,
+    options?: Partial<SQSMessageConsumerOptions>,
   ) {
+    this.options = {
+      onShutdown: () => {},
+      onException: console.error,
+      maxWaitMs: 2_000,
+      heartBeatMs: 5_000,
+      disableDeleteMessage: false,
+      ...options,
+    };
     this.debug = debug(`SQSMessageConsumer:${queueUrl.slice(-3)}`);
   }
 
@@ -42,8 +59,8 @@ export class SQSMessageConsumer {
     });
   }
 
-  private handleException(e: any) {
-    return this.onException(e);
+  private async handleException(e: any) {
+    return this.options.onException(e);
   }
 
   shutdown() {
@@ -51,7 +68,7 @@ export class SQSMessageConsumer {
       this.debug('Shutting down...');
       this.shuttingDown = true;
       try {
-        const ret = this.onShutdown();
+        const ret = this.options.onShutdown();
         if (ret instanceof Promise) {
           ret.catch((e) => this.handleException(e));
         }
@@ -74,7 +91,7 @@ export class SQSMessageConsumer {
   private async poll() {
     while (!this.shuttingDown) {
       const currentMs = Date.now();
-      let waitMs = this.maxWaitMs;
+      let waitMs = this.options.maxWaitMs;
       if (this.deadlineMs > 0) {
         if (currentMs >= this.deadlineMs) {
           this.shutdown();
@@ -94,7 +111,7 @@ export class SQSMessageConsumer {
         });
         this.debug('Received %d messages', messages?.length ?? 0);
         if (messages?.length) {
-          await Promise.all(messages.map((m) => this.handleMessage(m)));
+          await Promise.allSettled(messages.map((m) => this.handleMessage(m)));
         }
       } catch (e: any) {
         if (e instanceof QueueDoesNotExist) {
@@ -118,15 +135,31 @@ export class SQSMessageConsumer {
     // Handle message
     try {
       await this.onMessage(message);
+      await this.deleteCompletedMessage(message);
+    } catch (e: any) {
+      await this.handleException(
+        e instanceof QueueError
+          ? e
+          : new SQSMessageConsumerError(`Error processing message #${message.MessageId}: ${e.message}`, e),
+      );
+      await this.turnMessageVisible(message);
+    }
+  }
+
+  protected async deleteCompletedMessage(message: Message) {
+    if (this.options.disableDeleteMessage) {
+      return;
+    }
+
+    try {
       await this.deleteMessage(message);
     } catch (e: any) {
       if (e instanceof QueueDoesNotExist) {
         return; // Ignore
       }
       await this.handleException(
-        new SQSMessageConsumerError(`Error processing message #${message.MessageId}: ${e.message}`, e),
+        new SQSMessageConsumerError(`Error deleting message #${message.MessageId}: ${e.message}`, e),
       );
-      await this.turnMessageVisible(message);
     }
   }
 

@@ -19,6 +19,7 @@ import { QueueDoesNotExist } from '@aws-sdk/client-sqs';
 import { SQSMessageConsumer } from './SQSMessageConsumer';
 import { wait } from './utils';
 import debug from 'debug';
+import { QueueError } from './errors';
 
 const MAXIMUM_VIRTUAL_QUEUES_COUNT = 1_000_000;
 const VIRTUAL_QUEUE_NAME_ATTRIBUTE = '__AmazonSQSVirtualQueuesClient.QueueName';
@@ -57,21 +58,21 @@ export class SQSVirtualQueuesClient extends SQSClientAdapter {
   getVirtualQueueByUrl(queueUrl: string): VirtualQueue | null {
     const optionalVirtualQueueId = VirtualQueueID.fromQueueUrl(queueUrl);
     if (optionalVirtualQueueId) {
-      return this.getVirtualQueue(optionalVirtualQueueId.virtualQueueName);
+      const virtualQueue = this.getVirtualQueue(optionalVirtualQueueId.virtualQueueName);
+      if (!virtualQueue) {
+        throw new QueueDoesNotExist({
+          message: 'The specified queue does not exist',
+          $metadata: {},
+        });
+      }
+      return virtualQueue;
     } else {
       return null;
     }
   }
 
   getVirtualQueue(queueName: string): VirtualQueue | null {
-    const virtualQueue = this.virtualQueues.get(queueName);
-    if (!virtualQueue) {
-      throw new QueueDoesNotExist({
-        message: 'The specified queue does not exist',
-        $metadata: {},
-      });
-    }
-    return virtualQueue;
+    return this.virtualQueues.get(queueName) ?? null;
   }
 
   async createQueue(input: CreateQueueCommandInput): Promise<CreateQueueCommandOutput> {
@@ -179,24 +180,32 @@ class HostQueue {
   private readonly debug: debug.Debugger;
   constructor(private readonly sqs: SQSVirtualQueuesClient, readonly queueUrl: string) {
     this.debug = debug(`HostQueue:${queueUrl.slice(-3)}`);
-    this.consumer = new SQSMessageConsumer(this.sqs, queueUrl, (m) => this.dispatchMessage(m));
+    this.consumer = new SQSMessageConsumer(this.sqs, queueUrl, (m) => this.dispatchMessage(m), {
+      onException: (e: any) => {
+        if (!(e instanceof UnhandledVirtualQueueError)) {
+          console.error(e);
+        }
+      },
+      disableDeleteMessage: true,
+    });
     this.consumer.start();
   }
 
-  private dispatchMessage(m: Message) {
+  private async dispatchMessage(m: Message) {
     const virtualQueueName = m.MessageAttributes?.[VIRTUAL_QUEUE_NAME_ATTRIBUTE]?.StringValue;
-    this.debug('Dispatching message %s to virtual queue %s', m.ReceiptHandle, virtualQueueName);
     if (!virtualQueueName) {
       // Orphan message
       this.debug('Cannot dispatch orphan message: %o', m);
       return;
     }
+
     const virtualQueue = this.sqs.getVirtualQueue(virtualQueueName);
     if (virtualQueue) {
       this.debug(`Dispatched message ${m.ReceiptHandle} on virtual queue "${virtualQueue.name}"`);
       virtualQueue.buffer.deliver(m);
     } else {
       this.debug(`Virtual queue "${virtualQueueName}" not handled here.`);
+      throw new UnhandledVirtualQueueError(virtualQueueName);
     }
   }
 
@@ -276,5 +285,11 @@ export class ReceiveQueueBuffer {
 
   close() {
     this.closed = true;
+  }
+}
+
+class UnhandledVirtualQueueError extends QueueError {
+  constructor(queueName: string) {
+    super(`Virtual queue "${queueName}" not handled here.`, queueName);
   }
 }
