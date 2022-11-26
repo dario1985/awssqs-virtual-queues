@@ -2,10 +2,10 @@ import { Message, QueueDoesNotExist } from '@aws-sdk/client-sqs';
 import { RESPONSE_QUEUE_URL_ATTRIBUTE_NAME } from './constants';
 import { SQSClientAdapter } from './SQSClientAdapter';
 
-export class AmazonSQSResponderClient {
+export class SQSResponderClient {
   constructor(private readonly sqs: SQSClientAdapter) {}
   async sendResponseMessage(request: Message, response: Message) {
-    const replyQueueUrl = request.MessageAttributes?.[RESPONSE_QUEUE_URL_ATTRIBUTE_NAME]?.StringValue;
+    const replyQueueUrl = this.getMessageResponseQueueUrl(request);
 
     if (replyQueueUrl) {
       try {
@@ -20,6 +20,7 @@ export class AmazonSQSResponderClient {
           // TODO-RS: CW metric
           console.warn('Ignoring response to deleted response queue: ' + replyQueueUrl);
         }
+        throw e;
       }
     } else {
       // TODO-RS: CW metric
@@ -28,6 +29,10 @@ export class AmazonSQSResponderClient {
   }
 
   isResponseMessageRequested(requestMessage: Message) {
-    return requestMessage.MessageAttributes && RESPONSE_QUEUE_URL_ATTRIBUTE_NAME in requestMessage.MessageAttributes;
+    return Boolean(this.getMessageResponseQueueUrl(requestMessage));
+  }
+
+  getMessageResponseQueueUrl(requestMessage: Message) {
+    return requestMessage.MessageAttributes?.[RESPONSE_QUEUE_URL_ATTRIBUTE_NAME]?.StringValue;
   }
 }

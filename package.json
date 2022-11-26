@@ -1,12 +1,15 @@
 {
   "name": "awssqs-virtual-queues",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Amazon SQS virtual queues client",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "files": [
+    "lib/"
+  ],
   "scripts": {
-    "build": "rm -rf lib && tsc -p tsconfig.json",
-    "start:example": "tsc -p tsconfig.json && DEBUG=* node lib/example/index.js",
+    "build": "rm -rf lib && tsc -p tsconfig.build.json",
+    "start:example": "tsc -p tsconfig.json && DEBUG=SQS* npx concurrently \"node lib/examples/index.js --worker\" \"node lib/examples/index.js\"",
     "test": "jest"
   },
   "keywords": [
@@ -23,9 +26,12 @@
   },
   "devDependencies": {
     "@aws-sdk/client-sqs": "^3.204.0",
+    "@types/aws-lambda": "^8.10.109",
     "@types/debug": "^4.1.7",
+    "@types/jest": "^29.2.3",
     "@types/node": "^18.11.9",
     "jest": "^29.2.2",
+    "ts-jest": "^29.0.3",
     "typescript": "^4.8.4"
   },
   "peerDependencies": {

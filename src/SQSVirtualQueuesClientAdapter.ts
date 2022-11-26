@@ -17,7 +17,7 @@ import { VIRTUAL_QUEUE_HOST_QUEUE_ATTRIBUTE } from './constants';
 import { SQSClientAdapter } from './SQSClientAdapter';
 import { QueueDoesNotExist } from '@aws-sdk/client-sqs';
 import { SQSMessageConsumer } from './SQSMessageConsumer';
-import { wait } from './utils';
+import { clamp, wait } from './utils';
 import debug from 'debug';
 import { QueueError } from './errors';
 
@@ -179,7 +179,7 @@ class HostQueue {
   private readonly consumer: SQSMessageConsumer;
   private readonly debug: debug.Debugger;
   constructor(private readonly sqs: SQSVirtualQueuesClient, readonly queueUrl: string) {
-    this.debug = debug(`HostQueue:${queueUrl.slice(-3)}`);
+    this.debug = debug(`SQSVirtualQueuesClient:HostQueue[*${queueUrl.slice(-5)}]`);
     this.consumer = new SQSMessageConsumer(this.sqs, queueUrl, (m) => this.dispatchMessage(m), {
       onException: (e: any) => {
         if (!(e instanceof UnhandledVirtualQueueError)) {
@@ -277,7 +277,7 @@ export class ReceiveQueueBuffer {
     while (!this.closed && Date.now() < deadlineWaitMs && result.length < maxMessages) {
       result.push(...this.messages.splice(0, Math.min(maxMessages, maxMessages - result.length)));
       if (result.length < maxMessages) {
-        await wait(Math.min(waitTimeMs, Math.max(0, deadlineWaitMs - Date.now())));
+        await wait(clamp(deadlineWaitMs - Date.now(), 0, waitTimeMs));
       }
     }
     return result;

@@ -17,6 +17,7 @@ import {
   DeleteMessageCommandOutput,
   DeleteMessageCommandInput,
 } from '@aws-sdk/client-sqs';
+
 export class SQSClientAdapter {
   constructor(private readonly sqs: SQSClient) {}
 

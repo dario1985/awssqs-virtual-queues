@@ -1,7 +1,7 @@
 import { Message, SendMessageRequest } from '@aws-sdk/client-sqs';
 import { randomUUID } from 'crypto';
 import debug from 'debug';
-import { RESPONSE_QUEUE_URL_ATTRIBUTE_NAME } from './constants';
+import { RESPONSE_QUEUE_URL_ATTRIBUTE_NAME, VIRTUAL_QUEUE_HOST_QUEUE_ATTRIBUTE } from './constants';
 import { Deferred } from './deferred';
 import { ConsumerFn, SQSMessageConsumer } from './SQSMessageConsumer';
 import { SQSClientAdapter } from './SQSClientAdapter';
@@ -16,6 +16,12 @@ export class SQSRequesterClient {
     private readonly queuePrefix: string,
     private readonly queueAttributes: Record<string, string> = {},
   ) {}
+
+  setVirtualQueueOnHostQueue(hostQueueUrl: string): this {
+    if (!hostQueueUrl.startsWith('http')) throw TypeError('Expected valid QueueUrl');
+    this.queueAttributes[VIRTUAL_QUEUE_HOST_QUEUE_ATTRIBUTE] = hostQueueUrl;
+    return this;
+  }
 
   async sendMessageAndGetResponse(request: SendMessageRequest, timeoutMs: number) {
     const queueName = this.queuePrefix + randomUUID();
@@ -66,7 +72,7 @@ class ResponseListener extends SQSMessageConsumer {
       onException: exceptionHandler,
       maxWaitMs,
     });
-    this.debug = debug(`ResponseListener:${queueUrl.slice(-3)}`);
+    this.debug = debug(`SQSRequesterClient:ResponseListener:${queueUrl.slice(-3)}`);
   }
 
   setMessage(m: Message) {

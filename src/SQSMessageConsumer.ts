@@ -1,8 +1,8 @@
-import { Message, QueueDoesNotExist } from '@aws-sdk/client-sqs';
+import { Message, QueueDoesNotExist, ReceiveMessageCommandInput } from '@aws-sdk/client-sqs';
 import { Deferred } from './deferred';
 import { SQSClientAdapter } from './SQSClientAdapter';
 import debug from 'debug';
-import { wait } from './utils';
+import { clamp, wait } from './utils';
 import { QueueError } from './errors';
 
 export type ConsumerFn<T> = (message: T) => void | Promise<void>;
@@ -37,7 +37,7 @@ export class SQSMessageConsumer {
       disableDeleteMessage: false,
       ...options,
     };
-    this.debug = debug(`SQSMessageConsumer:${queueUrl.slice(-3)}`);
+    this.debug = debug(`SQSMessageConsumer[*${queueUrl.slice(-5)}]`);
   }
 
   runFor(timeoutMs: number) {
@@ -97,19 +97,22 @@ export class SQSMessageConsumer {
           this.shutdown();
           break;
         } else {
-          waitMs = Math.max(0, Math.min(waitMs, this.deadlineMs - currentMs));
+          waitMs = clamp(this.deadlineMs - currentMs, 0, waitMs);
         }
       }
 
       try {
-        this.debug('Checking messages...');
-        const { Messages: messages } = await this.sqs.receiveMessage({
-          QueueUrl: this.queueUrl,
+        const options: Partial<ReceiveMessageCommandInput> = {
           WaitTimeSeconds: Math.round(waitMs / 1000),
           MaxNumberOfMessages: 10,
           MessageAttributeNames: ['All'],
+        };
+        this.debug('Checking messages... %o', options);
+        const { Messages: messages } = await this.sqs.receiveMessage({
+          QueueUrl: this.queueUrl,
+          ...options,
         });
-        this.debug('Received %d messages', messages?.length ?? 0);
+        this.debug('Received %d messages.', messages?.length ?? 0);
         if (messages?.length) {
           await Promise.allSettled(messages.map((m) => this.handleMessage(m)));
         }
@@ -122,6 +125,10 @@ export class SQSMessageConsumer {
         } else {
           await this.handleException(e);
         }
+      } finally {
+        // Slow down if WaitTimeSeconds is not respected
+        const waitDiff = clamp(Math.round(waitMs / 2 - (Date.now() - currentMs)), 0, waitMs);
+        if (waitDiff > 500) await wait(waitDiff);
       }
     }
   }
@@ -191,7 +198,7 @@ export class SQSMessageConsumer {
       if (e instanceof QueueDoesNotExist) {
         return; // Ignore
       }
-      this.handleException(
+      await this.handleException(
         new SQSMessageConsumerError(`Error deleting message #${message.MessageId}: ${e.message}`, e),
       );
     }
